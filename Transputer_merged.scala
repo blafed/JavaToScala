@@ -1,23 +1,58 @@
 package uk.co.transputersystems.transputer.simulator
 
-import uk.co.transputersystems.transputer.simulator.debugger.DebuggerRecordedState
-import uk.co.transputersystems.transputer.simulator.debugger.Process
-import uk.co.transputersystems.transputer.simulator.debugger.ProcessStatus
-import uk.co.transputersystems.transputer.simulator.models._
+//import uk.co.transputersystems.transputer.simulator.debugger.DebuggerRecordedState
+//import uk.co.transputersystems.transputer.simulator.debugger.Process
+//import uk.co.transputersystems.transputer.simulator.debugger.ProcessStatus
+//import uk.co.transputersystems.transputer.simulator.models._
+
+import scala.collection.mutable.ArrayBuffer
 import java.io._
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util
-import java.util.Scanner
-import uk.co.transputersystems.transputer.simulator.models.Priority.HIGH
-import uk.co.transputersystems.transputer.simulator.models.Priority.LOW
+import java.util.{ArrayList, HashSet, List, Scanner, Set}
+//import uk.co.transputersystems.transputer.simulator.models.Priority.HIGH
+//import uk.co.transputersystems.transputer.simulator.models.Priority.LOW
+
+
+object ProcessStatus extends Enumeration {
+  type ProcessStatus = Value
+  val RUNNING, QUEUED, TERMINATED = Value
+}
+
+class Process(private var topWptr: Integer, var status: ProcessStatus.Value) {
+  this.Wptrs.add(topWptr)
+  private val Wptrs = new util.ArrayList[Integer]
+
+  def updateWptr(wptr: Integer): Unit = {
+    if (wptr < topWptr) topWptr = wptr
+    Wptrs.add(wptr)
+  }
+
+  def getWptrs: util.List[Integer] = {
+    val result = new util.ArrayList[Integer]
+    result.addAll(Wptrs)
+    result
+  }
+
+  def getTopWptr: Integer = topWptr
+
+  def getCurrentWptr: Integer = Wptrs.get(Wptrs.size - 1)
+}
+
+
+class DebuggerRecordedState {
+  final val memAccessed = new util.HashSet[Integer]
+  final val breakpoints = new util.HashSet[Integer]
+  final val processes = ArrayBuffer[Process]()
+}
+
 
 object Priority extends Enumeration {
-  val HIGH = new Priority()
-  val LOW = new Priority()
-  class Priority extends Val
-  implicit def convertValue(v: Value): Priority = v.asInstanceOf[Priority]
+  type Priority = Value
+  val HIGH, LOW = Value
 }
+case class Priority()
 
 class Registers(registers: Registers) {
   var Iptr: Int = registers.Iptr
@@ -105,10 +140,10 @@ object TransputerConstants {
   val CALL = 0x9
   val AJW = 0xb
   val REV = 0x00
-  val ADD = 0x05
-  val SUB = 0x0c
-  val MUL = 0x53
-  val DIV = 0x2c
+  val ADD : Byte = 0x05
+  val SUB : Byte = 0x0c
+  val MUL : Byte = 0x53
+  val DIV : Byte = 0x2c
   val AND = 0x46
   val OR = 0x4b
   val XOR = 0x33
@@ -185,7 +220,7 @@ object TransputerConstants {
   val NONESELECTED_O = -1
   val IN_PORTS = 16
   val SHIFT_IN_PORTS = 4
-  val NOIO = 0
+  val NOIO : Byte = 0
   val RUNREQUEST = 1
   val ACKRUN = 2
   val READYREQUEST = 3
@@ -196,7 +231,7 @@ object TransputerConstants {
   val ENABLE = 8
   val RESETREQUEST = 9
   val ACKRESET = 10
-  val ACKDATA = 11
+  val ACKDATA : Byte = 11
   val RESERVED = 0
   val MEMSTART = (28 * BYTESPERWORD)
   val CODESTART = (MEMSTART + ((MEMSIZE - MEMSTART) / 2))
@@ -213,13 +248,13 @@ object TransputerConstants {
 
 object TransputerHelpers {
   def extractWorkspacePointer(x: Int): Int = (x & (-2))
-  def extractPriority(Wdesc: Int): Priority =
-    if ((Wdesc & 1) == 1) LOW else HIGH
+  def extractPriority(Wdesc: Int): Priority.Value =
+    if ((Wdesc & 1) == 1) Priority.LOW else Priority.HIGH
   def extractPriorityBit(Wdesc: Int): Int = (Wdesc & 1)
-  def priorityToBit(priority: Priority): Int = if (priority == LOW) 1 else 0
+  def priorityToBit(priority: Priority.Value): Int = if (priority == Priority. LOW) 1 else 0
   def makeWorkspaceDescriptor(
       workspacePointer: Int,
-      priority: Priority
+      priority: Priority.Value
   ): Int = {
     ((extractWorkspacePointer(workspacePointer)) | (priorityToBit(priority)))
   }
@@ -334,7 +369,7 @@ class Transputer(
     val stdout: PrintWriter,
     val stderr: PrintWriter
 ) {
-  mem = new Array[Byte](TransputerConstants.MEMSIZE)
+  mem = new ArrayBuffer[Byte](TransputerConstants.MEMSIZE)
   FptrReg(0) = TransputerConstants.NOTPROCESS_P
   FptrReg(1) = TransputerConstants.NOTPROCESS_P
   BptrReg(0) = TransputerConstants.NOTPROCESS_P
@@ -365,13 +400,13 @@ class Transputer(
   outputLink.ack = TransputerConstants.NOIO
   outputLink.FptrReg = TransputerConstants.NOTPROCESS_P
   outputLink.BptrReg = TransputerConstants.NOTPROCESS_P
-  final val registers = new Nothing
-  final private val sreg = new Nothing
+  final val registers : Registers = new Nothing
+  final private val sreg : StatusRegister = new Nothing
   final private val FptrReg = new Array[Int](2)
   final private val BptrReg = new Array[Int](2)
   private var Ereg = 0
   final private val ClockReg = new Array[Int](2)
-  final private var mem: Array[Byte] = null
+  final private var mem: ArrayBuffer[Byte] = null
   var programEndPtr = 0
   // It seems that this is actually a memory
   // Location in the reserved memory space
@@ -379,9 +414,9 @@ class Transputer(
   final private val TNextReg = new Array[Int](2)
   final private val TEnabled = new Array[Boolean](2)
   private var BMbuffer = 0
-  final val inputLinks = new Array[Nothing](TransputerConstants.IN_PORTS)
-  final private val outputLink = new Nothing
-  final val debuggerState = new Nothing
+  final val inputLinks = new Array[InputLink](TransputerConstants.IN_PORTS)
+  final private val outputLink : OutputLink = new Nothing
+  final val debuggerState : DebuggerRecordedState = new Nothing
 
   /** Reads a word from an array in transputer memory
     *
@@ -394,7 +429,7 @@ class Transputer(
     */
   private def RIndexWord(base: Int, nth: Int) = {
     val bb = ByteBuffer.wrap(
-      mem,
+      mem.toArray,
       Transputer.AtWord(base, nth),
       TransputerConstants.BYTESPERWORD
     )
@@ -424,7 +459,7 @@ class Transputer(
     */
   private def WIndexWord(base: Int, nth: Int, x: Int): Unit = {
     val bb = ByteBuffer.wrap(
-      mem,
+      mem.toArray,
       Transputer.AtWord(base, nth),
       TransputerConstants.BYTESPERWORD
     )
@@ -549,12 +584,12 @@ class Transputer(
 
   def printWorkspaceMemory(output: PrintWriter): Unit = {
     output.printf("## Transputer %d\n", id)
-    import scala.collection.JavaConversions._
+//    import scala.collection.JavaConverters._
     for (process <- debuggerState.processes) {
       output.printf(
         "### Process %08X - %s\n",
         process.getCurrentWptr,
-        process.status.name
+        process.status.toString
       )
       val wptrs = process.getWptrs
       var i = Transputer.AtWord(process.getTopWptr, 0)
@@ -656,7 +691,7 @@ class Transputer(
     }
     while (fScanner.hasNextInt(16)) {
       instruction = fScanner.nextInt(16).toByte
-      mem(i) = instruction
+      mem(i) =  instruction.toByte
       debuggerState.memAccessed.add({
         i += 1; i - 1
       })
@@ -666,9 +701,9 @@ class Transputer(
     // Start processor in low priority
     registers.Wptr = TransputerHelpers.makeWorkspaceDescriptor(
       TransputerConstants.CODESTART - TransputerConstants.BYTESPERWORD,
-      LOW
+      Priority.LOW
     )
-    debuggerState.processes.add(
+    debuggerState.processes.append(
       new Process(registers.Wptr, ProcessStatus.RUNNING)
     )
     // set the WDESCINTSAVE to nothing
@@ -694,8 +729,10 @@ class Transputer(
 
   /** Perform an overflow check
     */
-  @throws[UnexpectedOverflowException]
-  private def overflowCheck(opcode: Byte, a: Int, b: Int): Unit = {
+//  @throws[UnexpectedOverflowException]
+  private def overflowCheck(_opcode: Byte, a: Int,  _b: Int): Unit = {
+  var opcode = _opcode
+  var b = _b
     if (opcode == TransputerConstants.SUB) {
       opcode = TransputerConstants.ADD
       b = -b
@@ -821,7 +858,7 @@ class Transputer(
     * @param processPriority
     *   the enqueued process' priority
     */
-  private def enqueueProcess(Wptr: Int, processPriority: Nothing): Unit = {
+  private def enqueueProcess(Wptr: Int, processPriority: Priority.Value): Unit = {
     // IF
     //    Fptr = NotProcess.p
     //        Fptr := ProcPtr
@@ -834,10 +871,10 @@ class Transputer(
     else
       WIndexWord(BptrReg(processPriorityBit), TransputerConstants.LINK_S, Wptr)
     BptrReg(processPriorityBit) = Wptr
-    debuggerState.processes.stream
+    debuggerState.processes
       .filter((p) => p.getCurrentWptr eq Wptr)
       .filter((p) => p.status ne ProcessStatus.QUEUED)
-      .forEach((p) => p.status = ProcessStatus.QUEUED)
+      .foreach((p) => p.status = ProcessStatus.QUEUED)
   }
 
   /** Activates a process, i.e. loads the instruction pointer from memory
@@ -845,10 +882,10 @@ class Transputer(
   private def activateProcess(): Unit = {
     registers.Oreg = 0
     registers.Iptr = RIndexWord(registers.Wptr, TransputerConstants.IPTR_S)
-    debuggerState.processes.stream
+    debuggerState.processes
       .filter((p) => p.getCurrentWptr eq registers.Wptr)
       .filter((p) => p.status eq ProcessStatus.QUEUED)
-      .forEach((p) => p.status = ProcessStatus.RUNNING)
+      .foreach((p) => p.status = ProcessStatus.RUNNING)
   }
 
   private def hardChannelInputAction(channelNumber: Int): Unit = {
@@ -999,7 +1036,7 @@ class Transputer(
       TransputerConstants.WDESCINTSAVE,
       registers.Wptr
     )
-    if (TransputerHelpers.extractPriority(registers.Wptr) eq LOW) {
+    if (TransputerHelpers.extractPriority(registers.Wptr) eq Priority.LOW) {
       WIndexWord(
         TransputerConstants.SAVEBASE,
         TransputerConstants.IPTRINTSAVE,
@@ -1049,15 +1086,15 @@ class Transputer(
     val processPointer = TransputerHelpers.extractWorkspacePointer(Wptr)
     stdout.printf("run_proc\n")
     currentProcessPriority match {
-      case HIGH =>
+      case Priority.HIGH =>
         // If the current process is high priority, queue up the new process
         stdout.printf("run_proc.enqueue_pri0\n")
         enqueueProcess(processPointer, newProcessPriority)
-        debuggerState.processes.add(new Process(Wptr, ProcessStatus.QUEUED))
+        debuggerState.processes.append(new Process(Wptr, ProcessStatus.QUEUED))
 
-      case LOW =>
+      case Priority.LOW =>
         newProcessPriority match {
-          case HIGH =>
+          case Priority.HIGH =>
             // If the current process is low priority and the new process high priority, switch immediately
             stdout.printf("run_proc changing priority\n")
             saveRegisters()
@@ -1065,11 +1102,11 @@ class Transputer(
             // TODO: Error flag stuff
             // probable nothing has to change though
             activateProcess()
-            debuggerState.processes.add(
+            debuggerState.processes.append(
               new Process(registers.Wptr, ProcessStatus.RUNNING)
             )
 
-          case LOW =>
+          case Priority.LOW =>
             // If the current process is low priority and the new process high priority, queue the new process
             stdout.printf("run_proc.proc_pri==1\n")
             if (
@@ -1080,13 +1117,13 @@ class Transputer(
               stdout.printf("run_proc-.No proc running\n")
               registers.Wptr = Wptr
               activateProcess()
-              debuggerState.processes.add(
+              debuggerState.processes.append(
                 new Process(Wptr, ProcessStatus.RUNNING)
               )
             } else {
               stdout.printf("runproc.enqueue_pri1\n")
-              enqueueProcess(processPointer, LOW)
-              debuggerState.processes.add(
+              enqueueProcess(processPointer, Priority.LOW)
+              debuggerState.processes.append(
                 new Process(Wptr, ProcessStatus.QUEUED)
               )
             }
@@ -1096,10 +1133,9 @@ class Transputer(
     }
   }
 
-  private def dequeueProcess(processPriority: Nothing): Unit = {
-    debuggerState.processes.stream
-      .filter((p) => p.getCurrentWptr eq registers.Wptr)
-      .findFirst
+  private def dequeueProcess(processPriority: Priority.Value): Unit = {
+    debuggerState.processes
+      .find((p) => p.getCurrentWptr eq registers.Wptr)
       .get
       .status = ProcessStatus.TERMINATED
     val processPriorityBit = TransputerHelpers.priorityToBit(processPriority)
@@ -1149,11 +1185,11 @@ class Transputer(
     val currentProcessPriority =
       TransputerHelpers.extractPriority(registers.Wptr)
     currentProcessPriority match {
-      case HIGH =>
+      case Priority.HIGH =>
         stdout.printf("priority 0\n")
         if (FptrReg(0) != TransputerConstants.NOTPROCESS_P) {
           stdout.printf("!=NOTPROCESS_P\n")
-          dequeueProcess(HIGH)
+          dequeueProcess( Priority.HIGH)
           activateProcess()
         } else {
           stdout.printf("NOTPROCESS_P\n")
@@ -1166,7 +1202,7 @@ class Transputer(
             ) != TransputerConstants.NOTPROCESS_P
           ) {
             stdout.printf("no interrupted process\n")
-            dequeueProcess(LOW)
+            dequeueProcess(Priority. LOW)
             activateProcess()
           } else if (
             TransputerHelpers.extractWorkspacePointer(
@@ -1175,10 +1211,10 @@ class Transputer(
           ) {} else if (sreg.moveBit) blockMoveFirstStep()
         }
 
-      case LOW =>
+      case Priority.LOW =>
         stdout.printf("priority 1\n")
         if (FptrReg(1) != TransputerConstants.NOTPROCESS_P) {
-          dequeueProcess(LOW)
+          dequeueProcess(Priority. LOW)
           activateProcess()
         } else {
           stdout.printf("Wptr = NOTPROCESS_P\n")
@@ -1241,8 +1277,8 @@ class Transputer(
     outputLink.requested = true
   }
 
-  @throws[UnexpectedOverflowException]
-  def processInputLink(inputLink: Nothing): Unit = {
+//  @throws[UnexpectedOverflowException]
+  def processInputLink(inputLink: InputLink): Unit = {
     val token = inputLink.fromProcessor
     // LinkInData ? byte
     if (inputLink.hasData) {
@@ -1298,7 +1334,7 @@ class Transputer(
       // PAR
       inputLink.toProcessor = TransputerConstants.READYREQUEST
       inputLink.WptrToProcessor = inputLink.Wptr
-      var interaction = TransputerConstants.NOIO
+      var interaction : Int = TransputerConstants.NOIO
       while (interaction == TransputerConstants.NOIO) {
         interaction = inputLink.fromProcessor
         performStep
@@ -1313,7 +1349,7 @@ class Transputer(
     }
   }
 
-  @throws[UnexpectedOverflowException]
+//  @throws[UnexpectedOverflowException]
   def processOutputLink(): Unit = {
     var token = 0
     token = outputLink.fromProcessor
@@ -1381,7 +1417,7 @@ class Transputer(
     }
   }
 
-  @throws[UnexpectedOverflowException]
+//  @throws[UnexpectedOverflowException]
   private def disableChannel(): Unit = {
     if (registers.Breg ne 0 /*FALSE*/ ) {
       stdout.printf("Breg != FALSE\n")
@@ -1425,7 +1461,7 @@ class Transputer(
     } else registers.Areg = 0 // FALSE
   }
 
-  @throws[UnexpectedOverflowException]
+//  @throws[UnexpectedOverflowException]
   private def enableChannel(): Unit = {
     if (registers.Areg ne 0 /*FALSE*/ ) {
       //        int chan_num = ChanOffset(registers.Breg);
@@ -1616,7 +1652,7 @@ class Transputer(
     * @param priorityQueue
     *   The timer which has made the request
     */
-  private def handleTimerRequest(priorityQueue: Nothing): Unit = {
+  private def handleTimerRequest(priorityQueue: Priority.Value): Unit = {
     val priorityBit = TransputerHelpers.priorityToBit(priorityQueue)
     TEnabled(priorityBit) = false
     // int frontproc = RIndexWord(TPtrLoc[queue_id], 0);
@@ -1647,8 +1683,9 @@ class Transputer(
     }
   }
 
-  @throws[UnexpectedOverflowException]
-  def handshakeInput(i: Int, token: Int): Unit = {
+//  @throws[UnexpectedOverflowException]
+  def handshakeInput(i: Int, _token: Int): Unit = {
+    var token = _token
     while (token == TransputerConstants.NOIO) {
       token = inputLinks(i).toProcessor
       processInputLink(inputLinks(i))
@@ -1656,8 +1693,9 @@ class Transputer(
     inputLinks(i).toProcessor = TransputerConstants.NOIO
   }
 
-  @throws[UnexpectedOverflowException]
-  def handshakeOutput(token: Int): Unit = {
+//  @throws[UnexpectedOverflowException]
+  def handshakeOutput(_token: Int): Unit = {
+    var token = _token
     while (token == TransputerConstants.NOIO) {
       token = outputLink.toProcessor
       processOutputLink()
@@ -1668,7 +1706,7 @@ class Transputer(
   /** Execute a secondary instruction, i.e. one where the actual opcode is in
     * the operand register
     */
-  @throws[UnexpectedOverflowException]
+//  @throws[UnexpectedOverflowException]
   private def executeSecondaryInstruction(): Unit = {
     val opcode = (registers.Oreg & 0xff).asInstanceOf[Byte]
     var tmp = 0
@@ -1837,10 +1875,9 @@ class Transputer(
 
       case (TransputerConstants.GAJW) =>
         stdout.printf("gajw\n")
-        processToUpdate = debuggerState.processes.stream
-          .filter((p) => p.status eq ProcessStatus.RUNNING)
-          .filter((p) => p.getCurrentWptr eq registers.Wptr)
-          .findFirst
+        processToUpdate = debuggerState.processes
+          .find((p) => p.status eq ProcessStatus.RUNNING)
+          .find((p) => p.getCurrentWptr eq registers.Wptr)
           .get
         tmp = TransputerHelpers.extractWorkspacePointer(registers.Wptr)
         registers.Wptr = TransputerHelpers.extractWorkspacePointer(
@@ -1852,10 +1889,9 @@ class Transputer(
 
       case (TransputerConstants.RET) =>
         stdout.printf("ret\n")
-        processToUpdate = debuggerState.processes.stream
-          .filter((p) => p.status eq ProcessStatus.RUNNING)
-          .filter((p) => p.getCurrentWptr eq registers.Wptr)
-          .findFirst
+        processToUpdate = debuggerState.processes
+          .find((p) => p.status eq ProcessStatus.RUNNING)
+          .find((p) => p.getCurrentWptr eq registers.Wptr)
           .get
         registers.Iptr = RIndexWord(registers.Wptr, 0)
         registers.Wptr = Transputer.AtWord(
@@ -1875,10 +1911,9 @@ class Transputer(
 
       case (TransputerConstants.ENDP) =>
         stdout.printf("endp\n")
-        processToUpdate = debuggerState.processes.stream
-          .filter((p) => p.status eq ProcessStatus.RUNNING)
-          .filter((p) => p.getCurrentWptr eq registers.Wptr)
-          .findFirst
+        processToUpdate = debuggerState.processes
+          .find((p) => p.status eq ProcessStatus.RUNNING)
+          .find((p) => p.getCurrentWptr eq registers.Wptr)
           .get
         tmp = RIndexWord(registers.Areg, 1)
         if (tmp == 1) {
@@ -2277,14 +2312,13 @@ class Transputer(
     output.printf("## Transputer %d\n", id)
     output.printf("ID Wptr    \t\tStatus\n")
     var i = 0
-    import scala.collection.JavaConversions._
     for (process <- debuggerState.processes) {
       output.printf(
         "%02d 0x%08X\t%s\n", {
           i += 1; i - 1
         },
         process.getCurrentWptr,
-        process.status.name
+        process.status.toString
       )
     }
   }
@@ -2343,7 +2377,7 @@ class Transputer(
   /** Executes a primary instruction, i.e. an instruction which uses the operand
     * as a parameter
     */
-  @throws[UnexpectedOverflowException]
+//  @throws[UnexpectedOverflowException]
   private def executePrimaryInstruction(): Unit = {
     val opcode = TransputerHelpers.extractOpcode(mem(registers.Iptr))
     val operand = TransputerHelpers.extractDirectOperand(mem(registers.Iptr))
@@ -2483,10 +2517,9 @@ class Transputer(
           -4,
           registers.Iptr + 1
         )
-        processToUpdate = debuggerState.processes.stream
-          .filter((p) => p.status eq ProcessStatus.RUNNING)
-          .filter((p) => p.getCurrentWptr eq registers.Wptr)
-          .findFirst
+        processToUpdate = debuggerState.processes
+          .find((p) => p.status eq ProcessStatus.RUNNING)
+          .find((p) => p.getCurrentWptr eq registers.Wptr)
           .get
         registers.Areg = registers.Iptr + 1
         registers.Wptr = Transputer.AtWord(
@@ -2499,10 +2532,9 @@ class Transputer(
 
       case (TransputerConstants.AJW) =>
         stdout.printf("ajw\n")
-        processToUpdate = debuggerState.processes.stream
-          .filter((p) => p.status eq ProcessStatus.RUNNING)
-          .filter((p) => p.getCurrentWptr eq registers.Wptr)
-          .findFirst
+        processToUpdate = debuggerState.processes
+          .find((p) => p.status eq ProcessStatus.RUNNING)
+          .find((p) => p.getCurrentWptr eq registers.Wptr)
           .get
         registers.Wptr = Transputer.AtWord(
           TransputerHelpers.extractWorkspacePointer(registers.Wptr),
@@ -2525,7 +2557,7 @@ class Transputer(
   /** Handle a request from an input channel to the processor.
     */
   private def handleInputChannelRequest(
-      inputLink: Nothing,
+      inputLink: InputLink,
       request: Int
   ): Unit = {
     inputLink.toProcessor = TransputerConstants.NOIO
@@ -2568,7 +2600,7 @@ class Transputer(
   /** Handle a request from an output channel to the processor.
     */
   private def handleOutputChannelRequest(
-      outputLink: Nothing,
+      outputLink: OutputLink,
       request: Int
   ): Unit = {
     outputLink.toProcessor = TransputerConstants.NOIO
@@ -2634,7 +2666,7 @@ class Transputer(
     * @return
     *   true if the process is valid, false otherwise
     */
-  @throws[UnexpectedOverflowException]
+//  @throws[UnexpectedOverflowException]
   def performStep: Boolean = {
     // completed indicates if current instruction has terminated
     val completed =
@@ -2649,7 +2681,7 @@ class Transputer(
       ) eq 0) && completed && Transputer.Later(ClockReg(0), TNextReg(0))
     ) {
       stdout.printf("performStep => handleTimerRequest(0), PRIORITY(0)\n")
-      handleTimerRequest(HIGH)
+      handleTimerRequest(Priority.HIGH)
       return true
     } else if (completed && checkChannels) return true
     else if (
@@ -2660,7 +2692,7 @@ class Transputer(
       stdout.printf(
         "performStep => transputer_handle_timer_reg(0), PRIORITY(1)\n"
       )
-      handleTimerRequest(HIGH)
+      handleTimerRequest(Priority. HIGH)
       return true
     } else if (
       TEnabled(1) && (TransputerHelpers.extractPriorityBit(
@@ -2670,7 +2702,7 @@ class Transputer(
       stdout.printf(
         "performStep => transputer_handle_timer_reg(1), PRIORITY(1)\n"
       )
-      handleTimerRequest(LOW)
+      handleTimerRequest(Priority.LOW)
       return true
     }
     if (
